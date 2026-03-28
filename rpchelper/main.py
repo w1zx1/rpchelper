@@ -591,6 +591,7 @@ def run_loop(
                     "assets": {
                         "large_image": "icon",
                         "large_text": "RPCHelper",
+                        "large_url": "https://github.com/w1zx1/rpchelper",
                     },
                 }
 
