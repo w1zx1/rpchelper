@@ -168,10 +168,10 @@ class X11ActiveWindow:
     def _pid_to_name(pid: int) -> str:
         if pid <= 0:
             return ""
-        path = f"/proc/{pid}/comm"
+
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                return f.read().strip()
+            exe_path = os.readlink(f"/proc/{pid}/exe")
+            return os.path.basename(exe_path).strip()
         except OSError:
             return ""
 
