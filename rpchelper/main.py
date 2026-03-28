@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-DEFAULT_DETAILS = "Using desktop"
+DEFAULT_DETAILS = "On desktop"
 DEFAULT_STATE = "No active window"
 X11_SUCCESS = 0
 X11_ANY_PROPERTY_TYPE = 0
@@ -589,6 +589,14 @@ def is_ignored_window(info: WindowInfo) -> bool:
     return False
 
 
+def is_windows_program_manager(info: WindowInfo) -> bool:
+    return (
+        os.name == "nt"
+        and info.process_name.casefold() == "explorer"
+        and info.title.casefold() == "program manager"
+    )
+
+
 def create_active_window_provider():
     if os.name == "nt":
         return WindowsActiveWindow()
@@ -617,7 +625,10 @@ def run_loop(
                 time.sleep(interval)
                 continue
             if not info.equals(last_info):
-                details, state = to_presence_fields(info, max_text_len)
+                if is_windows_program_manager(info):
+                    details, state = DEFAULT_DETAILS, DEFAULT_STATE
+                else:
+                    details, state = to_presence_fields(info, max_text_len)
                 activity = {
                     "details": details or DEFAULT_DETAILS,
                     "state": state or DEFAULT_STATE,
