@@ -21,6 +21,7 @@ X11_ANY_PROPERTY_TYPE = 0
 HARDCODED_CLIENT_ID = "1486712000472944671"
 HARDCODED_INTERVAL = 2.0
 HARDCODED_MAX_TEXT_LEN = 128
+IGNORED_WINDOW_MARKERS = ("wrapper-2.0",)
 
 
 @dataclass(frozen=True)
@@ -545,6 +546,15 @@ def connect_rpc(client_id: str, retries: int = 8, delay: float = 2.5) -> Discord
     raise RuntimeError(f"Failed to connect to Discord RPC: {last_error}")
 
 
+def is_ignored_window(info: WindowInfo) -> bool:
+    values = [info.wm_class, info.title, info.process_name]
+    normalized_values = [value.casefold() for value in values if value]
+    for marker in IGNORED_WINDOW_MARKERS:
+        if any(marker in value for value in normalized_values):
+            return True
+    return False
+
+
 def create_active_window_provider():
     if os.name == "nt":
         return WindowsActiveWindow()
@@ -569,6 +579,9 @@ def run_loop(
     try:
         while True:
             info = window_provider.get_active_window_info()
+            if is_ignored_window(info):
+                time.sleep(interval)
+                continue
             if not info.equals(last_info):
                 details, state = to_presence_fields(info, max_text_len)
                 activity = {
