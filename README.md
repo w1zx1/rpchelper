@@ -4,6 +4,8 @@ rpchelper определяет активное окно и показывает
 
 сторонние python-пакеты не нужны: используется только стандартная библиотека python.
 
+<img width="285" height="132" alt="это оно так выглядит" src="https://github.com/user-attachments/assets/81c25ba6-e6f2-4bad-9797-c74b75a6637c" />
+
 ## возможности
 
 - определяет активное окно через x11 на linux и winapi на windows
