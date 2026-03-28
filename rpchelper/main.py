@@ -590,10 +590,12 @@ def is_ignored_window(info: WindowInfo) -> bool:
 
 
 def is_windows_program_manager(info: WindowInfo) -> bool:
+    normalized_process_name = info.process_name.casefold()
+    normalized_title = info.title.casefold()
     return (
         os.name == "nt"
-        and info.process_name.casefold() == "explorer"
-        and info.title.casefold() == "program manager"
+        and normalized_process_name == "explorer"
+        and normalized_title in {"program manager", "no title"}
     )
 
 
