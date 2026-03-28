@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import ntpath
 import os
 import signal
 import socket
@@ -192,16 +193,133 @@ class X11ActiveWindow:
         )
 
 
+class WindowsActiveWindow:
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+    def __init__(self) -> None:
+        if os.name != "nt":
+            raise RuntimeError("Windows active window provider is only available on Windows.")
+
+        from ctypes import wintypes
+
+        self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.dword = wintypes.DWORD
+        self.handle = ctypes.c_void_p
+        self.invalid_handle_value = ctypes.c_void_p(-1).value
+
+        self.user32.GetForegroundWindow.argtypes = []
+        self.user32.GetForegroundWindow.restype = self.handle
+
+        self.user32.GetWindowTextLengthW.argtypes = [self.handle]
+        self.user32.GetWindowTextLengthW.restype = ctypes.c_int
+
+        self.user32.GetWindowTextW.argtypes = [self.handle, wintypes.LPWSTR, ctypes.c_int]
+        self.user32.GetWindowTextW.restype = ctypes.c_int
+
+        self.user32.GetClassNameW.argtypes = [self.handle, wintypes.LPWSTR, ctypes.c_int]
+        self.user32.GetClassNameW.restype = ctypes.c_int
+
+        self.user32.GetWindowThreadProcessId.argtypes = [self.handle, ctypes.POINTER(self.dword)]
+        self.user32.GetWindowThreadProcessId.restype = self.dword
+
+        self.kernel32.OpenProcess.argtypes = [self.dword, wintypes.BOOL, self.dword]
+        self.kernel32.OpenProcess.restype = self.handle
+
+        self.kernel32.QueryFullProcessImageNameW.argtypes = [
+            self.handle,
+            self.dword,
+            wintypes.LPWSTR,
+            ctypes.POINTER(self.dword),
+        ]
+        self.kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+
+        self.kernel32.CloseHandle.argtypes = [self.handle]
+        self.kernel32.CloseHandle.restype = wintypes.BOOL
+
+    def close(self) -> None:
+        return None
+
+    @staticmethod
+    def _strip_exe_suffix(name: str) -> str:
+        if name.lower().endswith(".exe"):
+            return name[:-4]
+        return name
+
+    def _window_text(self, hwnd: ctypes.c_void_p) -> str:
+        length = self.user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return ""
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        self.user32.GetWindowTextW(hwnd, buffer, len(buffer))
+        return buffer.value.strip()
+
+    def _class_name(self, hwnd: ctypes.c_void_p) -> str:
+        buffer = ctypes.create_unicode_buffer(256)
+        length = self.user32.GetClassNameW(hwnd, buffer, len(buffer))
+        if length <= 0:
+            return ""
+        return buffer.value.strip()
+
+    def _process_name(self, pid: int) -> str:
+        if pid <= 0:
+            return ""
+
+        process = self.kernel32.OpenProcess(self.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not process:
+            return ""
+
+        try:
+            size = self.dword(32768)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            ok = self.kernel32.QueryFullProcessImageNameW(
+                process,
+                0,
+                buffer,
+                ctypes.byref(size),
+            )
+            if not ok:
+                return ""
+            filename = ntpath.basename(buffer.value)
+            return self._strip_exe_suffix(filename)
+        finally:
+            self.kernel32.CloseHandle(process)
+
+    def get_active_window_info(self) -> WindowInfo:
+        hwnd = self.user32.GetForegroundWindow()
+        if not hwnd:
+            return WindowInfo("", "", "")
+
+        pid = self.dword()
+        self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return WindowInfo(
+            wm_class=self._class_name(hwnd),
+            title=self._window_text(hwnd),
+            process_name=self._process_name(pid.value),
+        )
+
+
 class DiscordIPC:
     def __init__(self, client_id: str) -> None:
         self.client_id = client_id
         self.sock: Optional[socket.socket] = None
+        self.pipe_handle: Optional[ctypes.c_void_p] = None
+        self.kernel32: Optional[ctypes.LibraryLoader] = None
+        if os.name == "nt":
+            self._init_windows_pipe_api()
 
     @staticmethod
     def _ipc_candidates() -> list[str]:
         env_path = os.getenv("DISCORD_IPC_PATH")
         if env_path:
             return [env_path]
+
+        if os.name == "nt":
+            candidates: list[str] = []
+            for i in range(10):
+                candidates.append(rf"\\?\pipe\discord-ipc-{i}")
+                candidates.append(rf"\\.\pipe\discord-ipc-{i}")
+            return candidates
 
         candidates: list[str] = []
         runtime_dir = os.getenv("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
@@ -210,20 +328,65 @@ class DiscordIPC:
             candidates.append(os.path.join("/tmp", f"discord-ipc-{i}"))
         return candidates
 
+    def _init_windows_pipe_api(self) -> None:
+        from ctypes import wintypes
+
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.handle = ctypes.c_void_p
+        self.dword = wintypes.DWORD
+        self.invalid_handle_value = ctypes.c_void_p(-1).value
+
+        self.kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            self.dword,
+            self.dword,
+            ctypes.c_void_p,
+            self.dword,
+            self.dword,
+            self.handle,
+        ]
+        self.kernel32.CreateFileW.restype = self.handle
+
+        self.kernel32.ReadFile.argtypes = [
+            self.handle,
+            ctypes.c_void_p,
+            self.dword,
+            ctypes.POINTER(self.dword),
+            ctypes.c_void_p,
+        ]
+        self.kernel32.ReadFile.restype = wintypes.BOOL
+
+        self.kernel32.WriteFile.argtypes = [
+            self.handle,
+            ctypes.c_void_p,
+            self.dword,
+            ctypes.POINTER(self.dword),
+            ctypes.c_void_p,
+        ]
+        self.kernel32.WriteFile.restype = wintypes.BOOL
+
+        self.kernel32.CloseHandle.argtypes = [self.handle]
+        self.kernel32.CloseHandle.restype = wintypes.BOOL
+
+    def _win_error(self) -> str:
+        code = ctypes.get_last_error()
+        return f"[WinError {code}] {ctypes.FormatError(code).strip()}"
+
     def connect(self) -> None:
         last_error: Optional[Exception] = None
         for path in self._ipc_candidates():
             try:
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.connect(path)
-                self.sock = s
+                if os.name == "nt":
+                    self.pipe_handle = self._open_windows_pipe(path)
+                else:
+                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s.connect(path)
+                    self.sock = s
                 self._handshake()
                 return
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                if self.sock:
-                    self.sock.close()
-                    self.sock = None
+                self.close()
 
         raise RuntimeError(
             f"Could not connect to Discord IPC socket. Is Discord running? Last error: {last_error}"
@@ -233,24 +396,91 @@ class DiscordIPC:
         if self.sock:
             self.sock.close()
             self.sock = None
+        if self.pipe_handle and self.kernel32:
+            self.kernel32.CloseHandle(self.pipe_handle)
+            self.pipe_handle = None
+
+    def _open_windows_pipe(self, path: str) -> ctypes.c_void_p:
+        if not self.kernel32:
+            raise RuntimeError("Windows IPC API is not initialized")
+
+        generic_read = 0x80000000
+        generic_write = 0x40000000
+        open_existing = 3
+        handle = self.kernel32.CreateFileW(
+            path,
+            generic_read | generic_write,
+            0,
+            None,
+            open_existing,
+            0,
+            None,
+        )
+        if handle in (None, self.invalid_handle_value):
+            raise OSError(f"Cannot open Discord IPC named pipe {path}: {self._win_error()}")
+        return handle
 
     def _send_frame(self, op: int, payload: dict) -> None:
-        if not self.sock:
-            raise RuntimeError("Discord IPC socket is not connected")
         data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         header = struct.pack("<ii", op, len(data))
-        self.sock.sendall(header + data)
+        self._write_all(header + data)
+
+    def _write_all(self, data: bytes) -> None:
+        if self.sock:
+            self.sock.sendall(data)
+            return
+        if self.pipe_handle and self.kernel32:
+            sent = 0
+            while sent < len(data):
+                chunk = data[sent : sent + 65536]
+                buffer = ctypes.create_string_buffer(chunk)
+                written = self.dword()
+                ok = self.kernel32.WriteFile(
+                    self.pipe_handle,
+                    buffer,
+                    len(chunk),
+                    ctypes.byref(written),
+                    None,
+                )
+                if not ok:
+                    raise RuntimeError(f"Discord IPC pipe write failed: {self._win_error()}")
+                if written.value <= 0:
+                    raise RuntimeError("Discord IPC pipe write returned zero bytes")
+                sent += written.value
+            return
+        raise RuntimeError("Discord IPC transport is not connected")
 
     def _recv_exact(self, size: int) -> bytes:
-        if not self.sock:
-            raise RuntimeError("Discord IPC socket is not connected")
-        out = b""
-        while len(out) < size:
-            chunk = self.sock.recv(size - len(out))
-            if not chunk:
-                raise RuntimeError("Discord IPC socket closed")
-            out += chunk
-        return out
+        if self.sock:
+            out = b""
+            while len(out) < size:
+                chunk = self.sock.recv(size - len(out))
+                if not chunk:
+                    raise RuntimeError("Discord IPC socket closed")
+                out += chunk
+            return out
+
+        if self.pipe_handle and self.kernel32:
+            out = bytearray()
+            while len(out) < size:
+                remaining = size - len(out)
+                buffer = ctypes.create_string_buffer(min(remaining, 65536))
+                read = self.dword()
+                ok = self.kernel32.ReadFile(
+                    self.pipe_handle,
+                    buffer,
+                    len(buffer),
+                    ctypes.byref(read),
+                    None,
+                )
+                if not ok:
+                    raise RuntimeError(f"Discord IPC pipe read failed: {self._win_error()}")
+                if read.value <= 0:
+                    raise RuntimeError("Discord IPC pipe closed")
+                out.extend(buffer.raw[: read.value])
+            return bytes(out)
+
+        raise RuntimeError("Discord IPC transport is not connected")
 
     def _recv_frame(self) -> tuple[int, dict]:
         header = self._recv_exact(8)
@@ -315,12 +545,22 @@ def connect_rpc(client_id: str, retries: int = 8, delay: float = 2.5) -> Discord
     raise RuntimeError(f"Failed to connect to Discord RPC: {last_error}")
 
 
+def create_active_window_provider():
+    if os.name == "nt":
+        return WindowsActiveWindow()
+    if sys.platform.startswith("linux"):
+        return X11ActiveWindow()
+    raise RuntimeError(
+        f"Unsupported platform: {sys.platform}. Only Linux/X11 and Windows are supported."
+    )
+
+
 def run_loop(
     client_id: str,
     interval: float,
     max_text_len: int,
 ) -> None:
-    x11 = X11ActiveWindow()
+    window_provider = create_active_window_provider()
     rpc = connect_rpc(client_id)
     started_at = int(time.time())
     last_info: Optional[WindowInfo] = None
@@ -328,7 +568,7 @@ def run_loop(
     print("RPCHelper started. Press Ctrl+C to stop.")
     try:
         while True:
-            info = x11.get_active_window_info()
+            info = window_provider.get_active_window_info()
             if not info.equals(last_info):
                 details, state = to_presence_fields(info, max_text_len)
                 activity = {
@@ -357,7 +597,7 @@ def run_loop(
         except Exception:  # noqa: BLE001
             pass
         rpc.close()
-        x11.close()
+        window_provider.close()
 
 
 def _handle_sigterm(_signum: int, _frame: object) -> None:
