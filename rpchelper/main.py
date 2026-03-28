@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-DEFAULT_DETAILS = "😛 On desktop"
+DEFAULT_DETAILS = "On desktop"
 DEFAULT_STATE = "No active window"
 X11_SUCCESS = 0
 X11_ANY_PROPERTY_TYPE = 0
@@ -562,7 +562,7 @@ def to_presence_fields(info: WindowInfo, max_len: int) -> tuple[str, str]:
     raw_name = info.process_name or info.wm_class or "Unknown app"
     app_name = raw_name[:1].upper() + raw_name[1:] if raw_name else "Unknown app"
     title = info.title or "No title"
-    details = _truncate_with_ellipsis(f"😛 In {app_name}", max_len)
+    details = _truncate_with_ellipsis(f"In {app_name}", max_len)
     state = _truncate_with_ellipsis(title, max_len)
     return details, state
 
