@@ -54,6 +54,20 @@ class X11ActiveWindow:
         self.Window = ctypes.c_ulong
         self.Atom = ctypes.c_ulong
 
+        class XErrorEvent(ctypes.Structure):
+            _fields_ = [
+                ("type", ctypes.c_int),
+                ("display", self.DisplayPtr),
+                ("resourceid", ctypes.c_ulong),
+                ("serial", ctypes.c_ulong),
+                ("error_code", ctypes.c_ubyte),
+                ("request_code", ctypes.c_ubyte),
+                ("minor_code", ctypes.c_ubyte),
+            ]
+
+        self.XErrorEvent = XErrorEvent
+        self.XErrorHandler = ctypes.CFUNCTYPE(ctypes.c_int, self.DisplayPtr, ctypes.POINTER(self.XErrorEvent))
+
         self.libx11.XOpenDisplay.argtypes = [ctypes.c_char_p]
         self.libx11.XOpenDisplay.restype = self.DisplayPtr
 
@@ -88,17 +102,33 @@ class X11ActiveWindow:
         self.libx11.XCloseDisplay.argtypes = [self.DisplayPtr]
         self.libx11.XCloseDisplay.restype = ctypes.c_int
 
+        self.libx11.XSync.argtypes = [self.DisplayPtr, ctypes.c_bool]
+        self.libx11.XSync.restype = ctypes.c_int
+
+        self.libx11.XSetErrorHandler.argtypes = [self.XErrorHandler]
+        self.libx11.XSetErrorHandler.restype = self.XErrorHandler
+
         self.display = self.libx11.XOpenDisplay(None)
         if not self.display:
             raise RuntimeError("Cannot open X11 display. Is X server available?")
 
         screen = self.libx11.XDefaultScreen(self.display)
         self.root = self.libx11.XRootWindow(self.display, screen)
+        self._last_x11_error = 0
+        self._error_handler = self.XErrorHandler(self._handle_x11_error)
+        self._previous_error_handler = self.libx11.XSetErrorHandler(self._error_handler)
 
     def close(self) -> None:
+        if self.display and self._previous_error_handler:
+            self.libx11.XSetErrorHandler(self._previous_error_handler)
+            self._previous_error_handler = None
         if self.display:
             self.libx11.XCloseDisplay(self.display)
             self.display = None
+
+    def _handle_x11_error(self, _display: ctypes.c_void_p, event_ptr: ctypes.POINTER(ctypes.Structure)) -> int:
+        self._last_x11_error = int(event_ptr.contents.error_code)
+        return 0
 
     def _atom(self, name: str) -> int:
         return int(self.libx11.XInternAtom(self.display, name.encode("utf-8"), False))
@@ -112,6 +142,7 @@ class X11ActiveWindow:
         nitems = ctypes.c_ulong()
         bytes_after = ctypes.c_ulong()
         prop_return = ctypes.POINTER(ctypes.c_ubyte)()
+        self._last_x11_error = 0
 
         status = self.libx11.XGetWindowProperty(
             self.display,
@@ -127,6 +158,9 @@ class X11ActiveWindow:
             ctypes.byref(bytes_after),
             ctypes.byref(prop_return),
         )
+        self.libx11.XSync(self.display, False)
+        if self._last_x11_error != 0:
+            return b""
         if status != X11_SUCCESS:
             return b""
 
