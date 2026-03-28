@@ -590,7 +590,7 @@ def run_loop(
                     "timestamps": {"start": started_at},
                     "assets": {
                         "large_image": "icon",
-                        "large_text": "RPCHelper",
+                        "large_text": "Click to get RPCHelper",
                         "large_url": "https://github.com/w1zx1/rpchelper",
                     },
                 }
