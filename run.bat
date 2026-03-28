@@ -8,13 +8,10 @@ if not "%~1"=="" (
 
 cd /d "%~dp0"
 
-if exist ".venv\Scripts\activate.bat" (
-  call ".venv\Scripts\activate.bat"
-)
-
+set "python_cmd=python"
 where py >nul 2>nul
 if %errorlevel%==0 (
-  py -3 -m rpchelper.main
-) else (
-  python -m rpchelper.main
+  set "python_cmd=py -3"
 )
+
+call %python_cmd% -m rpchelper.main
