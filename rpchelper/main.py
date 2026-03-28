@@ -588,6 +588,10 @@ def run_loop(
                     "details": details or DEFAULT_DETAILS,
                     "state": state or DEFAULT_STATE,
                     "timestamps": {"start": started_at},
+                    "assets": {
+                        "large_image": "icon",
+                        "large_text": "RPCHelper",
+                    },
                 }
 
                 try:
