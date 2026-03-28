@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-DEFAULT_DETAILS = "On desktop"
+DEFAULT_DETAILS = "😛 On desktop"
 DEFAULT_STATE = "No active window"
 X11_SUCCESS = 0
 X11_ANY_PROPERTY_TYPE = 0
@@ -591,7 +591,7 @@ def is_ignored_window(info: WindowInfo) -> bool:
 
 def is_windows_program_manager(info: WindowInfo) -> bool:
     normalized_process_name = info.process_name.casefold()
-    normalized_title = info.title.casefold()
+    normalized_title = (info.title or "No title").casefold()
     return (
         os.name == "nt"
         and normalized_process_name == "explorer"
